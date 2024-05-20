@@ -1,0 +1,319 @@
+-- 1 Количество проданных и пропавших продуктов по неделям
+
+select 
+   week_name, 
+   sum(quantity_sold) as sold,
+   sum(waste) as waste
+from coffe_shop.pastry_inventory pi2 
+right join coffe_shop.dates d on to_timestamp(pi2.transaction_date, 'MM/DD/YYYY') = d.transaction_date
+group by week_name
+order by week_name
+
+-- 2 Топ 10 самых продаваемых товаров каждый день и проранжируйте их по дням и кол-ву проданных штук
+
+select 
+   transaction_date, 
+   product_name, 
+   quantity_sold_per_day,
+   rating
+from(
+   select
+      transaction_date, 
+      product_name, 
+      quantity_sold_per_day,
+      row_number () over(partition by transaction_date order by quantity_sold_per_day desc ) as rating
+   from(
+      select
+         transaction_date, 
+         product_name, 
+         sum(sr.quantity) as quantity_sold_per_day
+      from coffe_shop.sales_reciepts sr 
+      inner join coffe_shop.product p on sr.product_id = p.product_id 
+      group by sr.transaction_date, p.product_name
+      ) as raiting
+   ) as quabtity_sold
+where rating <=10
+order by transaction_date, rating 
+;
+
+-- 3 Разница между выручкой в текущий и предыдущий день
+select 
+   transaction_date,
+   sales_amount,
+   prev_sales_amount,
+   difference_sales_amount,
+   round(percent_sales_amount) as percent_sales_amount
+from(
+   select 
+      transaction_date,
+      sales_amount,
+      prev_sales_amount,
+      difference_sales_amount,
+      (sales_amount * 100 / prev_sales_amount) - 100 as percent_sales_amount
+   from(
+      select 
+         transaction_date,
+         sales_amount,
+         prev_sales_amount,
+         (sales_amount - prev_sales_amount) as difference_sales_amount
+      from( 
+         select 
+            transaction_date,
+            sum(line_item_amount) as sales_amount,
+            lag (sum(line_item_amount))over (order by transaction_date) as prev_sales_amount
+         from coffe_shop.sales_reciepts sr
+         group by transaction_date 
+          ) as sales_amount
+        ) as difference_sales_amount
+      ) as percent_sales_amount
+order by transaction_date 
+;
+
+-- 4 Кумулятивная сумма от количества проданных продуктов каждый день
+
+select distinct 
+   transaction_date,
+   sum(quantity) as quantity,
+   sum(sum(quantity)) over(order by transaction_date) as cum_sum_quantity
+from coffe_shop.sales_reciepts sr 
+group by transaction_date 
+;
+
+-- 5 Разница между максимальной и минимальной ценой товара в категории
+ 
+with price_category as(
+     select 
+       product_category,
+       product_type,
+       product_name,
+       replace(replace(current_retail_price, '$', ''), ' ', '')::numeric as retail_price,
+       max(replace(replace (current_retail_price, '$', ''), ' ', '')::numeric)
+       over (partition by product_category) as max_price_category,
+       min(replace(replace (current_retail_price, '$', ''), ' ', '')::numeric)
+       over (partition by product_category) as min_price_category
+     from coffe_shop.product p
+)
+select  
+     product_category,
+     product_type,
+     product_name,
+     retail_price,
+     max_price_category,  
+     min_price_category,
+     (max_price_category - min_price_category) as difference
+from price_category 
+;
+
+-- 6 Топ-1 product_type для каждой product_category с максимальной суммой транзакций
+select 
+   product_category,
+   product_type
+from(
+   select 
+      p.product_category,
+      p.product_type,
+      sum(line_item_amount) as max_transaction_sum,
+      rank() over (partition by product_category order by sum(line_item_amount) desc) as type_rank
+   from coffe_shop.product p 
+   inner join coffe_shop.sales_reciepts sr on p.product_id = sr.product_id
+   group by p.product_category,
+   p.product_type
+   ) as transaction_sum
+where type_rank = 1 
+;
+
+-- 7 Рейтинг работников кофейни по количеству обработанных заказов (транзакций) по каждому дню. Кто из работников обработал максимальное кол-во заказов 2019-04-05?
+--7.1 Основной запрос 
+select  
+   transaction_date,
+   staff_id, 
+   concat, 
+   trans_count,
+   row_number () over (partition by transaction_date order by trans_count desc) as rating
+from( 
+   select 
+      sr.transaction_date,
+      s.staff_id, 
+      concat(s.first_name,' ', s.last_name) as concat,
+      count(quantity) as trans_count
+   from coffe_shop.staff s 
+   join coffe_shop.sales_reciepts sr on s.staff_id = sr.staff_id
+   group by sr.transaction_date, s.staff_id, s.first_name, s.last_name 
+     ) as trans_count
+     order by transaction_date, rating 
+     ;
+    
+--7.2 Кто из работников обработал максимальное кол-во заказов 2019-04-05? Ответ: Britanni Jorden
+with trans_count as (
+    select 
+      sr.transaction_date,
+      s.staff_id, 
+      concat(s.first_name,' ', s.last_name) as concat,
+      count(quantity) as trans_count
+     from coffe_shop.staff s 
+      join coffe_shop.sales_reciepts sr on s.staff_id = sr.staff_id
+      group by sr.transaction_date, s.staff_id, s.first_name, s.last_name 
+      )
+    select  
+      transaction_date,
+      staff_id, 
+      concat, 
+      trans_count,
+      row_number () over (partition by transaction_date order by trans_count desc) as rating
+   from trans_count
+where transaction_date  = '2019-04-05'
+;   
+      
+-- 8 Запрос для сравнения общей суммы транзакций на каждый день в сравнении с днями предыдущей недели 
+     
+select 
+   transaction_date,
+   round(trans_amount) as trans_amount,
+   round(trans_amount_prev_week) as trans_amount_prev_week
+from (
+   select 
+      transaction_date,
+      trans_amount,
+      lag(sum(trans_amount), 7) 
+      over(order by transaction_date) as trans_amount_prev_week
+   from (
+      select
+         transaction_date,
+         sum(line_item_amount) as trans_amount
+      from coffe_shop.sales_reciepts sr
+      group by transaction_date
+      order by transaction_date asc
+         ) as trans_amount
+         group by trans_amount.transaction_date, trans_amount.trans_amount
+      ) as trans_amount_prev_week 
+     ;
+
+    
+-- 9 Финансовый отчет
+
+SELECT 
+sr.sales_outlet_id
+store_address, 
+product_category,
+sum(line_item_amount) OVER () AS total_sum,
+sum(quantity) OVER () AS total_amount,
+sum(line_item_amount) OVER (PARTITION BY sr.sales_outlet_id) AS store_sum,
+sum(quantity) OVER (PARTITION BY sr.sales_outlet_id) AS store_amount,
+sum(line_item_amount) OVER (PARTITION BY sr.sales_outlet_id, product_category) AS store_product_sum,
+sum(quantity) OVER (PARTITION BY sr.sales_outlet_id, product_category) AS store_product_amount
+FROM sales_reciepts sr
+LEFT JOIN sales_outlet so 
+ON so.sales_outlet_id =sr.sales_outlet_id
+LEFT JOIN product p 
+ON p.product_id = sr.product_id; 
+
+
+
+-- 10 Нарастающая сумма транзакций по дням для каждого магазина и группе товаров.
+--Определить, на какой день будет (или не будет) достигнута цель по продажам в данной категории.
+
+--преобразуем таблицу с целевыми продажами по категории товаров и магазинам
+WITH sales_targets_prep AS (
+SELECT 
+'Whole Beans/Teas' AS product_group,
+sales_outlet_id,
+beans_goal AS sales_goal
+FROM sales_targets
+UNION 
+SELECT 
+'Beverages' AS product_group,
+sales_outlet_id,
+beverage_goal AS sales_goal
+FROM sales_targets
+UNION 
+SELECT 
+'Food' AS product_group,
+sales_outlet_id,
+food_goal AS sales_goal
+FROM sales_targets
+UNION 
+SELECT 
+'Merchandise' AS product_group,
+sales_outlet_id,
+merchandise_goal AS sales_goal
+FROM sales_targets
+),
+
+--считаем по таблице транзакций агрегат суммы продаж на уровне даты, магазина, категории товара
+sales_prep AS (
+SELECT
+transaction_date,
+product_group,
+sales_outlet_id, 
+sum(line_item_amount) AS sales_fact
+FROM sales_reciepts sr 
+LEFT JOIN product p 
+ON sr.product_id = p.product_id
+GROUP BY 1,2,3
+ORDER BY 2,3,1
+),
+
+--джойним фактические значения с целевыми, считаем нарастающий итог по фактическим продажам, считаем порядок дней
+--убираем для наглядности строки, где нет целевых значений
+sales_fact_target AS (
+SELECT 
+transaction_date,
+f.product_group,
+f.sales_outlet_id,
+sales_fact,
+sum(sales_fact) OVER (PARTITION BY f.product_group, f.sales_outlet_id ORDER BY transaction_date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS fact_sales_cum,
+sales_goal,
+ROW_NUMBER() OVER (PARTITION BY f.product_group, f.sales_outlet_id ORDER BY transaction_date) AS day_number
+FROM sales_prep f
+LEFT JOIN sales_targets_prep t
+ON f.sales_outlet_id = t.sales_outlet_id
+AND f.product_group = t.product_group
+WHERE sales_goal IS NOT NULL
+),
+
+--считаем с помощью еще одной оконки ранг дней, на который фактическое значение достигло целевого, чтобы по рангу можно было отфильтровать
+final_report AS (
+SELECT *,
+ROW_NUMBER() OVER (PARTITION BY product_group, sales_outlet_id ORDER BY transaction_date) AS target_number
+FROM sales_fact_target
+WHERE fact_sales_cum >= sales_goal
+)
+
+--выводим финальный результат
+SELECT 
+transaction_date,
+product_group,
+sales_outlet_id,
+fact_sales_cum AS fact_sales,
+sales_goal AS goal_sales,
+day_number
+FROM final_report 
+WHERE target_number = 1
+;
+
+
+--11 Скользящее среднее значение по дням для транзакций отдельно в каждом магазине и категории товара.
+
+--считаем агрегат суммы заказов на уровне даты, категории продуктов и магазинов 
+WITH sales_prep AS (
+SELECT
+transaction_date,
+product_category,
+sales_outlet_id, 
+sum(line_item_amount) AS sales_sum
+FROM sales_reciepts sr 
+LEFT JOIN product p 
+ON sr.product_id = p.product_id
+GROUP BY 1,2,3
+ORDER BY 2,3,1
+)
+
+--считаем скользящее среднее и выводим результат
+SELECT 
+transaction_date,
+product_category,
+sales_outlet_id,
+sales_sum, 
+round(avg(sales_sum) OVER (PARTITION BY product_category, sales_outlet_id ORDER BY transaction_date ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)) AS m_avg 
+FROM sales_prep
+

@@ -1,0 +1,151 @@
+-- 1 Количествово транзакций по дням
+select distinct 
+date_part('year', transaction_date:: date) as date_year,
+date_part('month', transaction_date:: date) as date_month,
+date_part('day', transaction_date:: date) as date_day,
+count(quantity) as sale_qty
+from coffe_shop.sales_reciepts sr 
+group by transaction_date;
+
+
+-- 2 Сумма заказов (line_item_amount) в каждом городе (store_city) и магазине.Отсортировать результат в порядке убывания сумм заказов
+select distinct 
+store_city, store_address, 
+round(sum(line_item_amount)) as sale_amount
+from coffe_shop.sales_outlet so  
+inner join coffe_shop.sales_reciepts sr 
+on so.sales_outlet_id = sr.sales_outlet_id
+group by store_city, store_address
+order by sale_amount desc ;
+
+-- 3 Вывести только те названия регионов (neighborhood), где продавался продукт “Columbian Medium Roast” с последней датой продажи в регионе
+select 
+so.neighborhood, 
+max(sr.transaction_date) as last_transaction
+from coffe_shop.sales_outlet so
+left join coffe_shop.sales_reciepts sr on so.sales_outlet_id = sr.sales_outlet_id
+left join coffe_shop.product p on sr.product_id = p.product_id 
+where p.product_name = 'Columbian Medium Roast'
+group by so.neighborhood;
+
+
+-- 4 Вывести электронные адреса клиентов и определить их домены с помощью функций работы со строками
+select email, 
+substring (email from position('@' in email) +1 ) as email_domain 
+from coffe_shop.customer;
+
+
+-- 5 Разделить имя клиентов на имя и фамилию, отредактировать номер карты лояльности, убрав пробелы. Вывести количество транзакций(transaction_id) для каждого клиента, отсортировать по убыванию
+select distinct customer_name,
+split_part(customer_name, ' ', 1) as first_name,
+split_part(customer_name, ' ', 2)  as last_name,
+loyalty_card_number,
+replace (loyalty_card_number,'-','') as loyalty_card_number_new_format,
+count(quantity) as transaction_qty
+from coffe_shop.customer c
+left join coffe_shop.sales_reciepts sr
+on c.customer_id = sr.customer_id 
+group by customer_name, loyalty_card_number
+order by transaction_qty desc; 
+
+ /* 6 Собрать витрину данных из нужных таблиц с выводом атрибутов. Для поля gender изменить значения по условию:
+Если gender = ‘M’, заменить на ‘Male’,
+Если gender = ‘F’, заменить на ‘Female’,
+В других случаях проставить ‘Not Defined’ */
+
+select
+sr.transaction_date, so.sales_outlet_id, 
+so.store_address, 
+sr.product_id, p.product_name,
+sr.customer_id, c.customer_name, 
+case 
+	when gender = 'M' then 'Male'
+	when gender = 'F' then 'Female'
+	else 'Not Defined'
+end as gender, 
+sr.unit_price, sr.quantity, sr.line_item_amount
+from coffe_shop.sales_reciepts sr
+left join coffe_shop.customer c on sr.customer_id = c.customer_id 
+left join coffe_shop.sales_outlet so on sr.sales_outlet_id = so.sales_outlet_id 
+left join coffe_shop.product p on sr.product_id = p.product_id;
+
+
+--7 Выручка (по полю line_item_amount) и кол-во проданных товаров по магазинам на каждый день
+select transaction_date, sales_outlet_id,
+sum(line_item_amount) as total_amount,
+sum(quantity) as total_quantity
+from coffe_shop.sales_reciepts sr 
+group by transaction_date, sales_outlet_id
+order by transaction_date, sales_outlet_id; 
+
+--8 Посчитать количество клиентов по поколениям
+with generations as (
+select 
+case 
+	when birth_year between 1946 and 1964 then 'Baby Boomers'
+	when birth_year between 1965 and 1980 then 'Gen X'
+	when birth_year between 1981 and 1989 then 'Older Millenials'
+	when birth_year between 1990 and 1994 then 'Younger Millenials'
+	else 'Gen Z'
+end as customers_count
+from coffe_shop.generations g
+)
+select generation ,
+count(customer_id) as customers_count
+from coffe_shop.generations g 
+inner join coffe_shop.customer c  on c.birth_year = g.birth_year
+group by generation
+order by customers_count desc;
+
+--9 Сделать справочник клиентов. Посчитать возраст клиентов, разделить имя и фамилию на 2 отдельных поля
+select 
+customer_id, 
+customer_name as customer_full_name,
+split_part(customer_name, ' ', 1) as customer_name,
+split_part(customer_name, ' ', 2)  as customer_surname,
+birthdate , 
+age(date(birthdate)) as customer_age
+from coffe_shop.customer c;
+
+/* 10 Сделать анализ покупателей и разделить их по категориям. Посчитать количество транзакций, сделанных каждым покупателем. 
+Разделить их на категории: Частые гости (>= 23 транзакций), Редкие посетители (< 10 транзакций), Стандартные посетители (все остальные) */
+select c.customer_id,
+c.customer_name,
+count(quantity)as transactions,
+case 
+	when count(quantity) >= 23 then 'Частый гость'
+	when count(quantity) < 10 then 'Редкий посетитель'
+	else 'Стандартный посетитель'
+end as customer_category
+from coffe_shop.customer c 
+inner join coffe_shop.sales_reciepts sr on c.customer_id =sr.customer_id 
+group by c.customer_id, c.customer_name
+order by transactions desc;
+
+
+-- 11 Преобразовать дату транзакции в нужный формат: год, месяц, день. Привести названия продуктов к стандартному виду в нижнем регистре
+select transaction_date,
+date_part ('year',transaction_date ::date)as trans_year,
+date_part ('month',transaction_date ::date)as trans_month,
+date_part ('day',transaction_date ::date)as trans_day,
+replace(lower(product_name),'-','') as product_name
+from coffe_shop.sales_reciepts sr 
+inner join coffe_shop.product p on sr.product_id = p.product_id
+group by transaction_date, product_name
+order by transaction_date;
+
+
+
+-- 12 Посчитать количество уникальных посетителей в каждом магазине каждый день
+select distinct transaction_date,
+store_address,
+count(distinct customer_id) as customers
+from coffe_shop.sales_reciepts sr 
+left join coffe_shop.sales_outlet so on sr.sales_outlet_id = so.sales_outlet_id 
+group by transaction_date, store_address
+order by store_address, transaction_date;
+
+
+
+
+
